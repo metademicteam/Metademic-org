@@ -3,10 +3,11 @@ import { useEffect, useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import Link from "next/link";
 
-type Msg = { id?: string; role: "user" | "assistant"; content: string };
+type Msg = { id?: string; role: "user" | "assistant"; content: string; meta?: Record<string, unknown> };
 type Conv = { id: string; title: string; created_at: string };
 
 const TIERS = ["public", "protected", "confidential"] as const;
+type JobProvenance = { answered_by?: string; answered_by_gpu_name?: string; answered_by_gpu_tier?: string; backend?: string; tokens_per_sec?: number };
 
 export default function ChatPage() {
   const supabase = createClient();
@@ -74,7 +75,8 @@ export default function ChatPage() {
         const rr = await fetch(`/api/racn/job?id=${j.job_id}`);
         const jj = await rr.json();
         if (jj.status === "completed" && jj.output) {
-          setMsgs((m) => [...m, { role: "assistant", content: jj.output }]);
+          const prov: JobProvenance = { answered_by: jj.answered_by_node_id || jj.answered_by, answered_by_gpu_name: jj.answered_by_gpu_name, answered_by_gpu_tier: jj.answered_by_gpu_tier, backend: jj.backend, tokens_per_sec: jj.tokens_per_sec };
+          setMsgs((m) => [...m, { role: "assistant", content: jj.output, meta: prov as Record<string, unknown> }]);
           setCredits((c) => (c !== null ? c - 10 : c));
           setLoading(false); setPhase("");
         } else if (jj.status === "failed") {
@@ -161,7 +163,15 @@ export default function ChatPage() {
           <div className="mx-auto grid max-w-2xl gap-4 px-4">
             {msgs.map((m, i) => (
               <div key={i} className={m.role === "user" ? "ml-auto max-w-[80%] rounded-2xl bg-black px-4 py-3 text-sm leading-6 text-white" : "max-w-[85%] rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm leading-6 text-zinc-800"}>
-                {m.content}
+                <div>{m.content as string}</div>
+                {m.meta && ((m.meta["answered_by"] as string) || (m.meta["backend"] as string)) && (
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-zinc-500">
+                    {(m.meta["answered_by"] as string) ? <span className="rounded-full bg-zinc-100 px-2 py-0.5 font-mono text-zinc-700">answered by {String((m.meta["answered_by_gpu_name"] as string) || (m.meta["answered_by"] as string))}</span> : null}
+                    {(m.meta["answered_by_gpu_tier"] as string) ? <span className={`rounded-full px-2 py-0.5 font-medium ${String(m.meta["answered_by_gpu_tier"]) === "high" ? "bg-emerald-100 text-emerald-800" : String(m.meta["answered_by_gpu_tier"]) === "medium" ? "bg-amber-100 text-amber-800" : "bg-zinc-100 text-zinc-600"}`}>{String(m.meta["answered_by_gpu_tier"])}</span> : null}
+                    {(m.meta["backend"] as string) ? <span className="rounded-full bg-zinc-100 px-2 py-0.5">{String(m.meta["backend"])}</span> : null}
+                    {typeof m.meta["tokens_per_sec"] === "number" && (m.meta["tokens_per_sec"] as number) > 0 ? <span className="font-mono">{Number(m.meta["tokens_per_sec"]).toFixed(1)} tok/s</span> : null}
+                  </div>
+                )}
               </div>
             ))}
             {loading && <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-500">{phase || "Routing…"}</div>}

@@ -165,6 +165,8 @@ export default function Navbar() {
           </div>
 
           <Link href="/chat" className="rounded-full px-3 py-1.5 text-[13.5px] font-medium text-zinc-700 hover:bg-zinc-50 hover:text-zinc-900">Chat</Link>
+          <Link href="/task-manager" className="rounded-full px-3 py-1.5 text-[13.5px] font-medium text-zinc-700 hover:bg-zinc-50 hover:text-zinc-900">Task Manager</Link>
+          <Link href="/contributions" className="rounded-full px-3 py-1.5 text-[13.5px] font-medium text-zinc-700 hover:bg-zinc-50 hover:text-zinc-900">Contributions</Link>
           <Link href="/news" className="rounded-full px-3 py-1.5 text-[13.5px] font-medium text-zinc-700 hover:bg-zinc-50 hover:text-zinc-900">News</Link>
           <Link href="/roadmap" className="rounded-full px-3 py-1.5 text-[13.5px] font-medium text-zinc-700 hover:bg-zinc-50 hover:text-zinc-900">Roadmap</Link>
           <Link href="/about" className="rounded-full px-3 py-1.5 text-[13.5px] font-medium text-zinc-700 hover:bg-zinc-50 hover:text-zinc-900">About</Link>
@@ -212,6 +214,8 @@ export default function Navbar() {
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <Link href="/chat" onClick={() => setMobileOpen(false)} className="rounded-full border border-zinc-200 px-4 py-2.5 text-center text-sm font-medium">Chat</Link>
+                <Link href="/task-manager" onClick={() => setMobileOpen(false)} className="rounded-full border border-zinc-200 px-4 py-2.5 text-center text-sm font-medium">Task Manager</Link>
+                <Link href="/contributions" onClick={() => setMobileOpen(false)} className="rounded-full border border-zinc-200 px-4 py-2.5 text-center text-sm font-medium">Contributions</Link>
                 <Link href="/news" onClick={() => setMobileOpen(false)} className="rounded-full border border-zinc-200 px-4 py-2.5 text-center text-sm font-medium">News</Link>
                 <Link href="/roadmap" onClick={() => setMobileOpen(false)} className="rounded-full border border-zinc-200 px-4 py-2.5 text-center text-sm font-medium">Roadmap</Link>
                 <Link href="/about" onClick={() => setMobileOpen(false)} className="rounded-full border border-zinc-200 px-4 py-2.5 text-center text-sm font-medium">About</Link>
