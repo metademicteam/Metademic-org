@@ -1,0 +1,10 @@
+services:
+  peer:
+    build: .
+    environment:
+      - COORDINATOR_URL=${COORDINATOR_URL:-wss://coordinator.metademic.org/ws}
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: 1, capabilities: [gpu] }]
+    restart: unless-stopped
