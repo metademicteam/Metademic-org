@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Purple background -->
+  <rect width="512" height="512" fill="#4A1C8C"/>
+  
+  <!-- Main white path for the pen + handles -->
+  <g fill="none" stroke="#FFFFFF" stroke-width="18" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Left curved handle -->
+    <path d="M 80 180 Q 160 280 180 380"/>
+    
+    <!-- Right curved handle -->
+    <path d="M 432 180 Q 352 280 332 380"/>
+    
+    <!-- Top horizontal bar with end circles -->
+    <path d="M 100 160 H 412"/>
+    
+    <!-- Left end circle -->
+    <circle cx="90" cy="160" r="18" fill="#FFFFFF" stroke="none"/>
+    
+    <!-- Right end circle -->
+    <circle cx="422" cy="160" r="18" fill="#FFFFFF" stroke="none"/>
+    
+    <!-- Pen nib body -->
+    <path d="M 180 380 
+             L 160 420 
+             Q 256 480 352 420 
+             L 332 380 
+             L 310 320 
+             L 256 280 
+             L 202 320 
+             Z"/>
+    
+    <!-- Pen tip base (bottom flat) -->
+    <path d="M 200 450 H 312"/>
+    
+    <!-- Center vertical line of the nib -->
+    <path d="M 256 300 V 400"/>
+    
+    <!-- Center circle of the nib -->
+    <circle cx="256" cy="420" r="22" fill="#FFFFFF" stroke="none"/>
+  </g>
+  
+  <!-- Teal selection square on top -->
+  <rect x="226" y="120" width="60" height="60" rx="8" ry="8" 
+        fill="none" stroke="#40C4C4" stroke-width="10"/>
+  
+  <!-- Inner dark square -->
+  <rect x="242" y="136" width="28" height="28" fill="#2A2A2A"/>
+</svg>

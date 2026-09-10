@@ -22,7 +22,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${inter.variable} ${mono.variable} h-full antialiased`}>
       <head>
-        <link rel="icon" href="/favicon.jpeg" sizes="any" />
+        <link rel="icon" href="/assets/logo.jpeg" sizes="any" />
       </head>
       <body className="min-h-full flex flex-col bg-[#FFFDEC] text-[#1A2421]">
         <JsonLd data={{ "@context": "https://schema.org", "@type": "Organization", name: "Metademic", url: "https://metademic.org", sameAs: ["https://www.metademic.com"] }} />
