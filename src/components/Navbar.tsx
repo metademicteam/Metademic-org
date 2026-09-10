@@ -59,8 +59,8 @@ export default function Navbar() {
   return (
     <header ref={navRef} className="sticky top-0 z-40 border-b border-[var(--hairline)] bg-[rgba(255,253,236,0.93)] backdrop-blur-xl supports-[backdrop-filter]:bg-[rgba(255,253,236,0.85)]">
       <div className="oai-container flex h-[64px] items-center justify-between gap-6 md:h-[76px]">
-        <Link href="/" className="flex items-center gap-3 shrink-0">
-          <span className="grid h-8 w-8 place-items-center border border-[var(--accent)] text-[13px] font-bold tracking-widest text-[var(--accent)]" style={{boxShadow: 'inset 0 0 16px var(--accent-soft)'}}>M∴</span>
+        <Link href="/" className="flex items-center gap-2.5 shrink-0">
+          <img src="/assets/logo.jpeg" alt="Metademic" width={32} height={32} className="rounded" />
           <span className="text-[15px] font-extrabold tracking-[0.08em] text-[var(--foreground)]">METADEMIC<small className="block text-[10px] font-semibold tracking-[0.18em] text-[var(--muted)]">RESEARCH LAB</small></span>
         </Link>
 

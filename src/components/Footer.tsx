@@ -13,7 +13,7 @@ export default function Footer() {
         <div className="grid gap-10 md:grid-cols-[1.2fr_0.8fr_0.8fr_0.8fr]">
           <div>
             <div className="flex items-center gap-3">
-              <span className="grid h-8 w-8 place-items-center border border-[var(--accent)] text-[13px] font-bold tracking-widest text-[var(--accent)]" style={{boxShadow: 'inset 0 0 16px var(--accent-soft)'}}>M∴</span>
+              <img src="/assets/logo.jpeg" alt="Metademic" width={32} height={32} className="rounded" />
               <div>
                 <span className="text-sm font-extrabold tracking-[0.08em] text-[var(--foreground)]">METADEMIC</span>
                 <small className="block text-[10px] font-semibold tracking-[0.18em] text-[var(--muted)]">RESEARCH LAB</small>
