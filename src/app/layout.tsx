@@ -11,9 +11,9 @@ const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-mono", displ
 export const metadata: Metadata = {
   metadataBase: new URL("https://metademic.org"),
   title: { default: "Metademic — An academic AI lab", template: "%s — Metademic" },
-  description: "An academic AI lab & scholarly platform. Open research at metademic.com. RACN — hybrid P2P LLM: install the node once, use it everywhere on the web.",
-  openGraph: { title: "Metademic — An academic AI lab", description: "Open research + RACN hybrid P2P supercompute.", type: "website", url: "https://metademic.org", siteName: "Metademic" },
-  twitter: { card: "summary_large_image", title: "Metademic — An academic AI lab", description: "Open research + RACN hybrid P2P." },
+  description: "An academic AI lab & scholarly platform. Open research at metademic.com. RACoN — hybrid P2P LLM: install the node once, use it everywhere on the web.",
+  openGraph: { title: "Metademic — An academic AI lab", description: "Open research + RACoN hybrid P2P supercompute.", type: "website", url: "https://metademic.org", siteName: "Metademic" },
+  twitter: { card: "summary_large_image", title: "Metademic — An academic AI lab", description: "Open research + RACoN hybrid P2P." },
   alternates: { canonical: "https://metademic.org" },
   robots: { index: true, follow: true },
 };
@@ -21,10 +21,11 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html lang="en" className={`${inter.variable} ${mono.variable} h-full antialiased`}>
-      <body className="min-h-full flex flex-col bg-white text-zinc-900">
+      <body className="min-h-full flex flex-col bg-[#FFFDEC] text-[#1A2421]">
         <JsonLd data={{ "@context": "https://schema.org", "@type": "Organization", name: "Metademic", url: "https://metademic.org", sameAs: ["https://www.metademic.com"] }} />
         <JsonLd data={{ "@context": "https://schema.org", "@type": "WebSite", name: "Metademic", url: "https://metademic.org", potentialAction: { "@type": "SearchAction", target: "https://metademic.org/research/{search_term_string}", "query-input": "required name=search_term_string" } }} />
-        <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-full focus:bg-black focus:px-4 focus:py-2 focus:text-sm focus:text-white">Skip to content</a>
+        <div className="noise" aria-hidden />
+        <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:bg-[var(--accent)] focus:px-4 focus:py-2 focus:text-sm focus:text-[#FFFDEC]">Skip to content</a>
         <Navbar />
         <main id="main" className="flex-1">{children}</main>
         <Footer />

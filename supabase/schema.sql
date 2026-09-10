@@ -4,6 +4,7 @@
 -- Idempotent where possible (IF NOT EXISTS / CREATE OR REPLACE).
 
 create extension if not exists "pgcrypto";
+create extension if not exists "vector";
 
 -- ------------------------------------------------------------------ profiles
 create table if not exists public.profiles (
@@ -82,18 +83,25 @@ create table if not exists public.racn_ledger_entries (
   id bigserial primary key,
   ts double precision default extract(epoch from now()),
   node_id text not null,
-  kind text not null check (kind in ('bootstrap','spend','earn','refund')),
+  kind text not null check (kind in ('bootstrap','spend','earn','refund','cache_hit')),
   amount integer not null,
   related_job text,
   note text
 );
 create index if not exists idx_racn_ledger_node on public.racn_ledger_entries(node_id, ts desc);
+-- v2 migration: allow cache_hit kind on existing DBs (IF NOT EXISTS tables don't alter check constraints)
+do $$ begin
+  alter table public.racn_ledger_entries drop constraint if exists racn_ledger_entries_kind_check;
+  alter table public.racn_ledger_entries add constraint racn_ledger_entries_kind_check check (kind in ('bootstrap','spend','earn','refund','cache_hit'));
+exception when others then null; end $$;
 
 -- ------------------------------------------------------------------ conversations & messages
 create table if not exists public.conversations (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.profiles(id) on delete cascade,
   title text not null default 'New chat',
+  model_id text default 'phi-3-mini-4b',
+  thinking_mode text default 'instant' check (thinking_mode in ('instant','deep')),
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
@@ -104,9 +112,16 @@ create table if not exists public.messages (
   user_id uuid not null references public.profiles(id) on delete cascade,
   role text not null check (role in ('user','assistant','system')),
   content text not null,
+  prompt_tokens integer default 0,
+  completion_tokens integer default 0,
   created_at timestamptz default now()
 );
 create index if not exists idx_messages_conversation on public.messages(conversation_id, created_at);
+-- v2 migrations for existing conversations/messages (IF NOT EXISTS tables don't add columns)
+do $$ begin alter table public.conversations add column if not exists model_id text default 'phi-3-mini-4b'; exception when others then null; end $$;
+do $$ begin alter table public.conversations add column if not exists thinking_mode text default 'instant' check (thinking_mode in ('instant','deep')); exception when others then null; end $$;
+do $$ begin alter table public.messages add column if not exists prompt_tokens integer default 0; exception when others then null; end $$;
+do $$ begin alter table public.messages add column if not exists completion_tokens integer default 0; exception when others then null; end $$;
 
 -- ------------------------------------------------------------------ racn jobs (Supabase-side history + provenance)
 create table if not exists public.racn_jobs (
@@ -118,7 +133,13 @@ create table if not exists public.racn_jobs (
   privacy_tier text not null default 'public' check (privacy_tier in ('public','protected','confidential','local_only')),
   status text not null default 'queued' check (status in ('queued','running','completed','failed','assigned','dead_letter')),
   output text,
-  credits_spent integer not null default 10,
+  credits_spent integer not null default 1,
+  -- RACN v2: model + thinking + cache
+  model_id text not null default 'phi-3-mini-4b',
+  thinking_mode text not null default 'instant' check (thinking_mode in ('instant','deep')),
+  prompt_hash text,
+  cache_hit boolean not null default false,
+  cache_source_job text,
   -- provenance: who answered (filled by coordinator callback / poll)
   answered_by_node_id text,
   answered_by_gpu_tier text,
@@ -127,13 +148,31 @@ create table if not exists public.racn_jobs (
   tokens_per_sec double precision,
   prompt_tokens integer,
   completion_tokens integer,
+  total_tokens integer generated always as (coalesce(prompt_tokens,0)+coalesce(completion_tokens,0)) stored,
+  reasoning text,
   assigned_workers text,
   outputs_verified text,
+  embedding vector(384),
   created_at timestamptz default now(),
   completed_at timestamptz
 );
+-- v2 migrations for existing racn_jobs (CREATE TABLE IF NOT EXISTS doesn't add columns)
+-- Must run BEFORE indexes that reference new columns, or existing DBs hit "column does not exist"
+do $$ begin alter table public.racn_jobs alter column credits_spent set default 1; exception when others then null; end $$;
+do $$ begin alter table public.racn_jobs add column if not exists model_id text not null default 'phi-3-mini-4b'; exception when others then null; end $$;
+do $$ begin alter table public.racn_jobs add column if not exists thinking_mode text not null default 'instant' check (thinking_mode in ('instant','deep')); exception when others then null; end $$;
+do $$ begin alter table public.racn_jobs add column if not exists prompt_hash text; exception when others then null; end $$;
+do $$ begin alter table public.racn_jobs add column if not exists cache_hit boolean not null default false; exception when others then null; end $$;
+do $$ begin alter table public.racn_jobs add column if not exists cache_source_job text; exception when others then null; end $$;
+do $$ begin alter table public.racn_jobs add column if not exists reasoning text; exception when others then null; end $$;
+do $$ begin alter table public.racn_jobs add column if not exists embedding vector(384); exception when others then null; end $$;
+do $$ begin alter table public.racn_jobs add column if not exists total_tokens integer generated always as (coalesce(prompt_tokens,0)+coalesce(completion_tokens,0)) stored; exception when others then null; end $$;
 create index if not exists idx_racn_jobs_user on public.racn_jobs(user_id, created_at desc);
 create index if not exists idx_racn_jobs_coord on public.racn_jobs(coordinator_job_id);
+create index if not exists idx_racn_jobs_hash on public.racn_jobs(prompt_hash);
+create index if not exists idx_racn_jobs_model on public.racn_jobs(model_id);
+-- HNSW/IVFFlat semantic index (vector extension):
+-- create index if not exists idx_racn_jobs_embedding on public.racn_jobs using ivfflat (embedding vector_cosine_ops) with (lists=100);
 
 -- ------------------------------------------------------------------ live telemetry (Task Manager)
 -- Each peer's :18001 reports CPU/RAM/GPU/bandwidth every heartbeat (~15s).
@@ -342,6 +381,40 @@ begin
   update public.racn_accounts set balance = balance + p_amount, lifetime_earned = lifetime_earned + p_amount, updated_at = now() where node_id = p_node_id;
   insert into public.racn_ledger_entries (ts, node_id, kind, amount, related_job, note) values (extract(epoch from now()), p_node_id, 'earn', p_amount, p_job_id, 'task completed & verified');
 end; $$;
+
+-- RACN v2: semantic cache search (pgvector cosine) + cache helpers
+create or replace function public.racn_semantic_search(
+  p_embedding vector(384), p_model_id text default null, p_threshold double precision default 0.92, p_limit integer default 1
+) returns table (id uuid, prompt text, output text, model_id text, similarity double precision) language plpgsql security definer set search_path=public as $func$
+begin
+  return query
+  select j.id, j.prompt, j.output, j.model_id, (1 - (j.embedding <=> p_embedding))::double precision as similarity
+  from public.racn_jobs j
+  where j.embedding is not null and j.cache_hit = false and j.status = 'completed'
+    and (p_model_id is null or j.model_id = p_model_id)
+    and (1 - (j.embedding <=> p_embedding)) >= p_threshold
+  order by j.embedding <=> p_embedding
+  limit p_limit;
+end;
+$func$;
+
+create or replace function public.racn_upsert_job_cache(
+  p_coordinator_job_id text, p_prompt text, p_prompt_hash text, p_model_id text, p_thinking_mode text,
+  p_output text, p_reasoning text, p_prompt_tokens integer, p_completion_tokens integer,
+  p_backend text, p_answered_by_node_id text, p_embedding vector(384)
+) returns uuid language plpgsql security definer set search_path=public as $$
+declare v_id uuid;
+begin
+  insert into public.racn_jobs (coordinator_job_id, prompt, prompt_hash, model_id, thinking_mode, output, reasoning, prompt_tokens, completion_tokens, backend, answered_by_node_id, embedding, status, credits_spent, user_id)
+  values (p_coordinator_job_id, p_prompt, p_prompt_hash, coalesce(p_model_id,'phi-3-mini-4b'), coalesce(p_thinking_mode,'instant'), p_output, p_reasoning, coalesce(p_prompt_tokens,0), coalesce(p_completion_tokens,0), p_backend, p_answered_by_node_id, p_embedding, 'completed', 1, (select id from auth.users limit 1))
+  on conflict (coordinator_job_id) do update set output=excluded.output, reasoning=excluded.reasoning, prompt_tokens=excluded.prompt_tokens, completion_tokens=excluded.completion_tokens, embedding=excluded.embedding, status='completed'
+  returning id into v_id;
+  if v_id is null then
+    select id into v_id from public.racn_jobs where coordinator_job_id = p_coordinator_job_id limit 1;
+  end if;
+  return v_id;
+end;
+$$;
 
 -- Provenance: record who answered a Supabase job (called by next/api poll or coordinator webhook)
 create or replace function public.racn_job_provenance(

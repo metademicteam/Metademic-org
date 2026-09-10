@@ -16,7 +16,7 @@ export type Post = {
 
 export const featured: Post = {
   slug: "distributed-reasoning-for-science",
-  title: "Distributed reasoning for science: why RACN is built for the scholarly record",
+  title: "Distributed reasoning for science: why RACoN is built for the scholarly record",
   excerpt:
     "How a distributed LLM changes what a research lab can verify, cite, and reproduce — and why it belongs next to the journal, not in place of it.",
   category: "Research",
@@ -38,7 +38,7 @@ export const news: Post[] = [
   },
   {
     slug: "racn-early-preview",
-    title: "RACN: early preview for research partners",
+    title: "RACoN: early preview for research partners",
     excerpt: "A distributed LLM system designed for scientific work — now in limited preview.",
     category: "Product",
     date: "Aug 18, 2026",
@@ -105,7 +105,7 @@ export const research: Post[] = [
   {
     slug: "field-notes-distributed-inference",
     title: "Field notes: distributed inference for long-context scientific documents",
-    excerpt: "Early lessons from RACN’s inference layer on 100k+ token papers.",
+    excerpt: "Early lessons from RACoN’s inference layer on 100k+ token papers.",
     category: "Engineering",
     date: "Jul 28, 2026",
     readTime: "9 min read",

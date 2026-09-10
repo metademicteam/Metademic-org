@@ -1,46 +1,21 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
-import Link from "next/link";
 
-type Msg = { id?: string; role: "user" | "assistant"; content: string; meta?: Record<string, unknown> };
-type Conv = { id: string; title: string; created_at: string };
+import { useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
-const TIERS = ["public", "protected", "confidential"] as const;
-type JobProvenance = { answered_by?: string; answered_by_gpu_name?: string; answered_by_gpu_tier?: string; backend?: string; tokens_per_sec?: number };
+type Msg = { role: "user" | "assistant"; content: string };
+
+const API_BASE = process.env.NEXT_PUBLIC_RACOON_API_BASE ?? "https://metademic.tail6cb521.ts.net/v1";
+const API_KEY = process.env.NEXT_PUBLIC_RACOON_API_KEY ?? "";
+const MODEL = process.env.NEXT_PUBLIC_RACOON_MODEL ?? "qwen3.5:4b-q4_K_M";
 
 export default function ChatPage() {
-  const supabase = createClient();
-  const [authed, setAuthed] = useState<boolean | null>(null);
-  const [credits, setCredits] = useState<number | null>(null);
-  const [convs, setConvs] = useState<Conv[]>([]);
-  const [convId, setConvId] = useState<string | null>(null);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [prompt, setPrompt] = useState("");
-  const [tier, setTier] = useState<(typeof TIERS)[number]>("public");
   const [loading, setLoading] = useState(false);
-  const [phase, setPhase] = useState("");
+  const [streaming, setStreaming] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    supabase.auth.getUser().then(async ({ data }) => {
-      const u = data.user;
-      setAuthed(!!u);
-      if (!u) return;
-      const { data: c } = await supabase.from("credits").select("balance").eq("user_id", u.id).single();
-      setCredits(c?.balance ?? 0);
-      const { data: cs } = await supabase.from("conversations").select("id,title,created_at").eq("user_id", u.id).order("updated_at", { ascending: false }).limit(30);
-      if (cs) setConvs(cs as Conv[]);
-    });
-  }, []);
-
-  async function loadConv(id: string) {
-    setConvId(id);
-    const { data } = await supabase.from("messages").select("id,role,content").eq("conversation_id", id).order("created_at", { ascending: true });
-    setMsgs((data as Msg[]) || []);
-  }
-
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, phase]);
 
   async function send(e?: React.FormEvent) {
     e?.preventDefault();
@@ -49,139 +24,187 @@ export default function ChatPage() {
     setPrompt("");
     setMsgs((m) => [...m, { role: "user", content: q }]);
     setLoading(true);
-    setPhase("Routing to best GPU peer…");
+    setStreaming(true);
 
     try {
-      const r = await fetch("/api/racn/chat", {
+      const response = await fetch(`${API_BASE}/chat/completions`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ prompt: q, privacy_tier: tier, conversation_id: convId }),
+        headers: {
+          "content-type": "application/json",
+          Authorization: `Bearer ${API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: MODEL,
+          messages: [
+            ...msgs.map((m) => ({ role: m.role, content: m.content })),
+            { role: "user", content: q },
+          ],
+          stream: true,
+        }),
       });
-      const j = await r.json().catch(() => ({ error: `HTTP ${r.status}`, detail: r.statusText }));
-      if (!r.ok) {
-        const detail = j.detail ? ` — ${String(j.detail).slice(0, 600)}` : j.hint ? ` — ${j.hint}` : "";
-        setMsgs((m) => [...m, { role: "assistant", content: `⚠️ ${j.error || `HTTP ${r.status}`}${detail}` }]);
-        setLoading(false); setPhase(""); return;
+
+      if (!response.ok) {
+        setMsgs((m) => [...m, { role: "assistant", content: `⚠️ Request failed: ${response.status}` }]);
+        setLoading(false);
+        setStreaming(false);
+        return;
       }
-      if (j.conversation_id && j.conversation_id !== convId) {
-        setConvId(j.conversation_id);
-        setConvs((prev) => [{ id: j.conversation_id, title: q.slice(0, 48), created_at: new Date().toISOString() }, ...prev.filter((c) => c.id !== j.conversation_id)]);
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        setMsgs((m) => [...m, { role: "assistant", content: "⚠️ No response body" }]);
+        setLoading(false);
+        setStreaming(false);
+        return;
       }
-      let tries = 0;
-      const poll = async () => {
-        tries++;
-        if (tries === 2) setPhase("Best GPU selected → running generate()…");
-        if (tries === 6) setPhase("Still generating on peer (lease 18s, auto-requeue on drop)…");
-        const rr = await fetch(`/api/racn/job?id=${j.job_id}`);
-        const jj = await rr.json();
-        if (jj.status === "completed" && jj.output) {
-          const prov: JobProvenance = { answered_by: jj.answered_by_node_id || jj.answered_by, answered_by_gpu_name: jj.answered_by_gpu_name, answered_by_gpu_tier: jj.answered_by_gpu_tier, backend: jj.backend, tokens_per_sec: jj.tokens_per_sec };
-          setMsgs((m) => [...m, { role: "assistant", content: jj.output, meta: prov as Record<string, unknown> }]);
-          setCredits((c) => (c !== null ? c - 10 : c));
-          setLoading(false); setPhase("");
-        } else if (jj.status === "failed") {
-          setMsgs((m) => [...m, { role: "assistant", content: `⚠️ Failed: ${jj.output || "coordinator/peer error"} — check docker logs -f racn-coordinator + tailscale funnel 8443` }]);
-          setLoading(false); setPhase("");
-        } else if (tries > 32) {
-          const state = jj.status || "queued";
-          if (state === "assigned" || state === "running") {
-            setMsgs((m) => [...m, { role: "assistant", content: `(Still ${state} on peer — model may be loading/downloading (~2.3GB first time) or slow CPU. Check ${jj.coordinator_job_id || jj.id || ""} in coordinator logs.)` }]);
-          } else {
-            setMsgs((m) => [...m, { role: "assistant", content: `(Queued — no GPU peer dispatched. Your screenshot shows native peers online, but coordinator may have no *registered* WSS worker. Check: curl https://desktop-b7l73cl.tail6cb521.ts.net:8443/nodes and docker logs -f racn-coordinator)` }]);
+
+      const decoder = new TextDecoder();
+      let accumulated = "";
+      setMsgs((m) => [...m, { role: "assistant", content: "" }]);
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split("\n").filter((line) => line.trim() !== "");
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const data = line.slice(6);
+            if (data === "[DONE]") continue;
+            try {
+              const parsed = JSON.parse(data);
+              const delta = parsed.choices?.[0]?.delta?.content;
+              if (delta) {
+                accumulated += delta;
+                setMsgs((m) => [
+                  ...m.slice(0, -1),
+                  { role: "assistant", content: accumulated },
+                ]);
+              }
+            } catch {}
           }
-          setLoading(false); setPhase("");
-        } else setTimeout(poll, 1500);
-      };
-      setTimeout(poll, 900);
-    } catch (err: unknown) {
-      setMsgs((m) => [...m, { role: "assistant", content: String((err as Error)?.message || err) }]);
-      setLoading(false); setPhase("");
+        }
+      }
+    } catch (err) {
+      setMsgs((m) => [
+        ...m,
+        { role: "assistant", content: `⚠️ Error: ${String((err as Error)?.message || err)}` },
+      ]);
+    } finally {
+      setLoading(false);
+      setStreaming(false);
     }
   }
 
-  if (authed === null) return <div className="oai-container py-10 text-sm text-zinc-500">Loading…</div>;
-  if (!authed) return (
-    <div className="oai-container py-12">
-      <div className="mx-auto max-w-lg rounded-[22px] border border-zinc-200 p-6">
-        <h1 className="text-lg font-semibold">Sign in to chat with RACN</h1>
-        <p className="mt-1 text-sm leading-6 text-zinc-600">P2P: prompt → coordinator scores peers (gpu+mem+bw−lat−queue+shard+trust) → fastest GPU runs <span className="font-mono text-xs">generate()</span>. 10 credits/prompt. Install a node to earn.</p>
-        <div className="mt-4 flex gap-2">
-          <Link href="/auth" className="rounded-full bg-black px-5 py-2.5 text-sm font-medium text-white hover:bg-zinc-800">Sign in</Link>
-          <Link href="/download" className="rounded-full border border-zinc-200 px-5 py-2.5 text-sm font-medium hover:bg-zinc-50">Download node</Link>
-        </div>
-      </div>
-    </div>
-  );
-
   return (
-    <div className="flex h-[calc(100vh-56px)] bg-white">
-      <aside className="hidden w-[260px] shrink-0 flex-col border-r border-zinc-200 bg-zinc-50/60 md:flex">
-        <div className="flex items-center justify-between p-3">
-          <span className="text-xs font-semibold tracking-widest text-zinc-500 uppercase">History</span>
-          <button onClick={() => { setConvId(null); setMsgs([]); }} className="rounded-full bg-black px-3 py-1.5 text-xs font-medium text-white hover:bg-zinc-800">New chat</button>
+    <div className="flex h-[calc(100vh-76px)] bg-[#FFFDEC]">
+      {/* Sidebar */}
+      <aside className="hidden w-[260px] shrink-0 flex-col border-r border-[var(--hairline)] bg-[var(--panel-2)]/60 md:flex">
+        <div className="flex items-center justify-between p-4">
+          <span className="text-xs font-bold tracking-widest text-[var(--muted)] uppercase">RACoN</span>
+          <button
+            onClick={() => setMsgs([])}
+            className="bg-[var(--accent)] px-3 py-1.5 text-xs font-bold text-[#FFFDEC] hover:bg-[var(--accent-2)]"
+          >
+            New chat
+          </button>
         </div>
-        <div className="flex-1 overflow-auto px-2 pb-2">
-          {convs.length === 0 && <div className="px-3 py-6 text-xs leading-5 text-zinc-500">No chats yet — your first prompt creates a conversation.</div>}
-          {convs.map((c) => (
-            <button key={c.id} onClick={() => loadConv(c.id)} className={`w-full truncate rounded-xl px-3 py-2.5 text-left text-sm hover:bg-white ${convId === c.id ? "bg-white ring-1 ring-zinc-200" : ""}`}>
-              <div className="truncate font-medium text-zinc-900">{c.title}</div>
-              <div className="font-mono text-xs text-zinc-500">{c.id.slice(0, 8)}</div>
-            </button>
-          ))}
-        </div>
-        <div className="border-t border-zinc-200 p-3 text-xs leading-5 text-zinc-600">
-          <div className="rounded-xl bg-white p-3 ring-1 ring-zinc-200">
-            <div className="font-medium text-zinc-900">P2P fast path</div>
-            <div className="mt-1">No RAG — coordinator picks best GPU, peer runs <span className="font-mono">generate()</span>.</div>
-            <Link href="/download" className="mt-2 inline-flex text-xs font-medium underline">Install node →</Link>
+        <div className="flex-1 overflow-auto px-4 pb-4">
+          <div className="border border-[var(--hairline)] bg-[var(--panel)] p-4">
+            <div className="text-xs font-semibold text-[var(--foreground)]">About RACoN</div>
+            <p className="mt-2 text-xs leading-6 text-[var(--muted)]">
+              RACoN (Reciprocal Agentic Compute Network) is a hybrid P2P LLM inference system. Your prompts
+              are routed to the best available GPU peer in the mesh.
+            </p>
           </div>
         </div>
       </aside>
 
+      {/* Main chat area */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3">
-          <div className="flex items-center gap-2">
-            <div className="text-sm font-medium">RACN Chat</div>
-            {convId && <span className="rounded-full bg-zinc-100 px-2 py-0.5 font-mono text-xs text-zinc-600">{convId.slice(0, 8)}</span>}
-            <span className="hidden text-xs text-zinc-500 md:inline">· prompt → best GPU → generate()</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <select value={tier} onChange={(e) => setTier(e.target.value as typeof tier)} className="h-8 rounded-full border border-zinc-200 bg-white px-3 text-xs font-medium">
-              {TIERS.map((t) => <option key={t} value={t}>{t}</option>)}
-            </select>
-            <span className="rounded-full bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white">{credits ?? "—"} credits</span>
-            <Link href="/download" className="hidden rounded-full border border-zinc-200 px-3 py-1.5 text-xs font-medium hover:bg-zinc-50 md:inline-flex">Install node</Link>
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-[var(--hairline)] px-4 py-3">
+          <div className="flex items-center gap-3">
+            <div className="text-sm font-semibold text-[var(--foreground)]">RACoN Chat</div>
           </div>
         </div>
 
+        {/* Messages */}
         <div className="flex-1 overflow-auto py-6">
           {msgs.length === 0 && (
-            <div className="mx-auto max-w-2xl rounded-2xl border border-dashed border-zinc-200 bg-zinc-50 p-6 text-sm leading-6 text-zinc-600">
-              Pure P2P mode: your prompt is scored across live peers (H1 16GB GPU → H6 CPU). Best score wins, gets a WSS <span className="font-mono text-xs">job</span> frame, runs <span className="font-mono text-xs">generate(prompt)</span>, returns signed output. Lease 18s, monitor 5s — if peer drops, coordinator requeues to next-best GPU. No vector DB, no retrieval — fastest answer.
+            <div className="mx-auto max-w-2xl border border-dashed border-[var(--hairline)] bg-[var(--panel-2)] p-8 text-center">
+              <div className="text-sm font-semibold text-[var(--foreground)]">
+                Welcome to RACoN Chat
+              </div>
+              <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                A distributed LLM inference system powered by peer-to-peer GPU sharing.
+              </p>
             </div>
           )}
-          <div className="mx-auto grid max-w-2xl gap-4 px-4">
+          <div className="mx-auto grid max-w-3xl gap-6 px-4">
             {msgs.map((m, i) => (
-              <div key={i} className={m.role === "user" ? "ml-auto max-w-[80%] rounded-2xl bg-black px-4 py-3 text-sm leading-6 text-white" : "max-w-[85%] rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm leading-6 text-zinc-800"}>
-                <div>{m.content as string}</div>
-                {m.meta && ((m.meta["answered_by"] as string) || (m.meta["backend"] as string)) && (
-                  <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-zinc-500">
-                    {(m.meta["answered_by"] as string) ? <span className="rounded-full bg-zinc-100 px-2 py-0.5 font-mono text-zinc-700">answered by {String((m.meta["answered_by_gpu_name"] as string) || (m.meta["answered_by"] as string))}</span> : null}
-                    {(m.meta["answered_by_gpu_tier"] as string) ? <span className={`rounded-full px-2 py-0.5 font-medium ${String(m.meta["answered_by_gpu_tier"]) === "high" ? "bg-emerald-100 text-emerald-800" : String(m.meta["answered_by_gpu_tier"]) === "medium" ? "bg-amber-100 text-amber-800" : "bg-zinc-100 text-zinc-600"}`}>{String(m.meta["answered_by_gpu_tier"])}</span> : null}
-                    {(m.meta["backend"] as string) ? <span className="rounded-full bg-zinc-100 px-2 py-0.5">{String(m.meta["backend"])}</span> : null}
-                    {typeof m.meta["tokens_per_sec"] === "number" && (m.meta["tokens_per_sec"] as number) > 0 ? <span className="font-mono">{Number(m.meta["tokens_per_sec"]).toFixed(1)} tok/s</span> : null}
-                  </div>
-                )}
+              <div key={i} className={m.role === "user" ? "ml-auto max-w-[80%]" : "max-w-[85%]"}>
+                <div className="mb-1 flex items-center gap-2">
+                  <span
+                    className={`text-[10px] font-bold uppercase tracking-widest ${
+                      m.role === "user" ? "text-[var(--muted)]" : "text-[var(--accent)]"
+                    }`}
+                  >
+                    {m.role === "user" ? "You" : "RACoN"}
+                  </span>
+                  {m.role === "assistant" && streaming && i === msgs.length - 1 && (
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--accent)]" />
+                  )}
+                </div>
+                <div
+                  className={
+                    m.role === "user"
+                      ? "bg-[var(--accent)] px-4 py-3 text-sm leading-6 text-[#FFFDEC]"
+                      : "border border-[var(--hairline)] bg-[var(--panel)] px-4 py-3 text-sm leading-6 text-[var(--foreground)]"
+                  }
+                >
+                  {m.role === "user" ? (
+                    <div>{m.content}</div>
+                  ) : m.content ? (
+                    <div className="md-content">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
+                    </div>
+                  ) : (
+                    <span className="text-[var(--muted)]">Generating…</span>
+                  )}
+                </div>
               </div>
             ))}
-            {loading && <div className="rounded-2xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-500">{phase || "Routing…"}</div>}
             <div ref={bottomRef} />
           </div>
         </div>
 
-        <form onSubmit={send} className="mx-auto flex w-full max-w-2xl gap-2 border-t border-zinc-200 p-4">
-          <input value={prompt} onChange={(e) => setPrompt(e.target.value)} placeholder="Ask RACN — best GPU will answer…" className="h-11 flex-1 rounded-full border border-zinc-200 bg-white px-5 text-sm outline-none placeholder:text-zinc-400 focus:border-zinc-300 focus:ring-4 focus:ring-zinc-100" />
-          <button disabled={loading} className="h-11 rounded-full bg-black px-6 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50">Send</button>
+        {/* Input */}
+        <form
+          onSubmit={send}
+          className="mx-auto flex w-full max-w-3xl gap-2 border-t border-[var(--hairline)] p-4"
+        >
+          <textarea
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+            placeholder="Ask RACoN…"
+            rows={1}
+            className="flex-1 resize-none border border-[var(--hairline)] bg-[var(--panel)] px-5 py-3 text-sm text-[var(--foreground)] outline-none placeholder:text-[var(--muted)] focus:border-[var(--accent)] focus:ring-4 focus:ring-[var(--accent-soft)]"
+          />
+          <button
+            disabled={loading || !prompt.trim()}
+            className="h-11 bg-[var(--accent)] px-6 text-sm font-bold text-[#FFFDEC] hover:bg-[var(--accent-2)] disabled:opacity-50"
+          >
+            {loading ? "…" : "Send"}
+          </button>
         </form>
       </div>
     </div>
